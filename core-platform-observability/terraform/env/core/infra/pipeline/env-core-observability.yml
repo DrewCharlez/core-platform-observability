@@ -1,0 +1,244 @@
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    include:
+      - terraform/env/core/infra/*
+      - terraform/env/core/infra/pipeline/env-core-observability.yml
+
+resources:
+  repositories:
+    - repository: pipeline
+      type: git
+      name: platform-azdo-pipeline
+      ref: feature/1055-build-template-azfn
+
+variables:
+  # // conditional variables //
+  - name: isPR
+    value: $[eq(variables['Build.Reason'], 'PullRequest')]
+  - name: isMainBranch
+    value: $[eq(variables['Build.SourceBranch'], 'refs/heads/main')]
+
+  # // common variables //
+  - group: subscription-common
+  - group: environment-common
+  
+  # Put in common Variable group?
+  - name: vmImage
+    value: 'ubuntu-20.04'
+
+  - name: platform
+    value: '$(CORE_PLATFORM_NAME_SHORT)'
+  - name: scope
+    value: 'env'
+  - name: domain
+    value: 'core'
+  - name: service
+    value: 'observability'
+
+  - name: terraformDirectory
+    value: 'terraform/$(scope)/$(domain)/infra' 
+  - name: terraformStateKey
+    value: '$(platform)-$(scope)-$(domain)-$(service)'
+
+pool:
+  vmImage: '$(vmImage)'
+
+stages:
+  - template: templates/stage/initialise-pipeline.yml@pipeline
+    parameters:
+      useGitVersion: true
+
+  - stage: Build
+    dependsOn: ['Initialise_Pipeline']
+
+    jobs:
+      - template: templates/job/terraform-validate.yml@pipeline
+        parameters:
+          terraformModules:
+            - '$(terraformDirectory)'
+
+  - stage: D01_Deploy_UKS
+    dependsOn: ['Build']
+    condition: and(succeeded(), eq(variables.isPR, true))
+    variables:
+      # // change for each subscription and environment //
+      - group: subscription-nonprod
+      - group: region-uks
+      - group: terraform-state-sub-nonprod-uks
+      - group: environment-d01
+      - group: acp-env-core-infra-d01-uks
+
+    jobs:
+      - template: templates/job/terraform-apply.yml@pipeline
+        parameters:
+          # // job //
+          platform: $(platform)
+          scope: $(scope)
+          domain: '$(domain)'
+          service: '$(service)'
+
+          # // terraform //
+          terraformStateResourceGroup: '$(terraform_state_RESOURCE_GROUP_NAME)'
+          terraformStateStorageAccount: '$(terraform_state_STORAGE_ACCOUNT_NAME)'
+          terraformStateContainer: '$(terraform_state_STORAGE_CONTAINER)'
+          terraformStateWorkspace: '$(SCOPE_NAME)'
+
+          terraformAuthentication:
+            ARM_TENANT_ID: $(AZUREAD_TENANT_ID)
+            ARM_SUBSCRIPTION_ID: $(AZURE_SUBSCRIPTION_ID)
+            ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+            ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+
+          # // deployments //
+          deployments:
+            - jobName: 'Core_Observability' # // change for each deployment object within the deployment job //
+              environment: 'D01-UKS' # //change for each environment and region //
+              dependsOn: []
+              terraformRootModulePath: '$(terraformDirectory)'
+              terraformStateKey: '$(terraformStateKey)'
+              terraformInputVariables:
+                TF_VAR_region: '$(AZURE_REGION)'
+                TF_VAR_scope_name: '$(SCOPE_NAME)'
+                TF_VAR_app_insights_ikey: '$(acp_env_core_infra_APPLICATION_INSIGHTS_IKEY)'
+
+
+  - stage: T01_Deploy_UKS
+    dependsOn: ['Build']
+    condition: and(succeeded(), eq(variables.isMainBranch, true))
+    variables:
+      # // change for each subscription and environment //
+      - group: subscription-nonprod
+      - group: region-uks
+      - group: terraform-state-sub-nonprod-uks
+      - group: environment-t01
+      - group: acp-env-core-infra-t01-uks
+
+
+    jobs:
+      - template: templates/job/terraform-apply.yml@pipeline
+        parameters:
+          # // job //
+          platform: $(platform)
+          scope: $(scope)
+          domain: '$(domain)'
+          service: '$(service)'
+
+          # // terraform //
+          terraformStateResourceGroup: '$(terraform_state_RESOURCE_GROUP_NAME)'
+          terraformStateStorageAccount: '$(terraform_state_STORAGE_ACCOUNT_NAME)'
+          terraformStateContainer: '$(terraform_state_STORAGE_CONTAINER)'
+          terraformStateWorkspace: '$(SCOPE_NAME)'
+
+          terraformAuthentication:
+            ARM_TENANT_ID: $(AZUREAD_TENANT_ID)
+            ARM_SUBSCRIPTION_ID: $(AZURE_SUBSCRIPTION_ID)
+            ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+            ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+
+          # // deployments //
+          deployments:
+            - jobName: 'Core_Observability' # // change for each deployment object within the deployment job //
+              environment: 'T01-UKS' # //change for each environment and region //
+              dependsOn: []
+              terraformRootModulePath: '$(terraformDirectory)'
+              terraformStateKey: '$(terraformStateKey)'
+              terraformInputVariables:
+                TF_VAR_region: '$(AZURE_REGION)'
+                TF_VAR_scope_name: '$(SCOPE_NAME)'
+                TF_VAR_app_insights_ikey: '$(acp_env_core_infra_APPLICATION_INSIGHTS_IKEY)'
+                
+
+  - stage: PAT_Deploy_UKS
+    dependsOn: ['T01_Deploy_UKS']
+    variables:
+      # // change for each subscription and environment //
+      - group: subscription-nonprod
+      - group: region-uks
+      - group: terraform-state-sub-nonprod-uks
+      - group: environment-pat
+      - group: acp-stg-core-infra-int-uks
+      - group: acp-env-core-infra-pat-uks
+
+
+    jobs:
+      - template: templates/job/terraform-apply.yml@pipeline
+        parameters:
+          # // job //
+          platform: $(platform)
+          scope: $(scope)
+          domain: '$(domain)'
+          service: '$(service)'
+
+          # // terraform //
+          terraformStateResourceGroup: '$(terraform_state_RESOURCE_GROUP_NAME)'
+          terraformStateStorageAccount: '$(terraform_state_STORAGE_ACCOUNT_NAME)'
+          terraformStateContainer: '$(terraform_state_STORAGE_CONTAINER)'
+          terraformStateWorkspace: '$(SCOPE_NAME)'
+
+          terraformAuthentication:
+            ARM_TENANT_ID: $(AZUREAD_TENANT_ID)
+            ARM_SUBSCRIPTION_ID: $(AZURE_SUBSCRIPTION_ID)
+            ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+            ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+
+          # // deployments //
+          deployments:
+            - jobName: 'Core_Observability' # // change for each deployment object within the deployment job //
+              environment: 'PAT-UKS' # //change for each environment and region //
+              dependsOn: []
+              terraformRootModulePath: '$(terraformDirectory)'
+              terraformStateKey: '$(terraformStateKey)'
+              terraformInputVariables:
+                TF_VAR_region: '$(AZURE_REGION)'
+                TF_VAR_scope_name: '$(SCOPE_NAME)'
+                TF_VAR_app_insights_ikey: '$(acp_env_core_infra_APPLICATION_INSIGHTS_IKEY)'
+                
+                
+
+  - stage: PROD_Deploy_UKS
+    dependsOn: ['PAT_Deploy_UKS']
+    variables:
+      # // change for each subscription and environment //
+      - group: subscription-prod
+      - group: region-uks
+      - group: terraform-state-sub-prod-uks
+      - group: environment-prod
+      - group: acp-stg-core-infra-prod-uks
+      - group: acp-env-core-infra-prod-uks
+
+    jobs:
+      - template: templates/job/terraform-apply.yml@pipeline
+        parameters:
+          # // job //
+          platform: $(platform)
+          scope: $(scope)
+          domain: '$(domain)'
+          service: '$(service)'
+
+          # // terraform //
+          terraformStateResourceGroup: '$(terraform_state_RESOURCE_GROUP_NAME)'
+          terraformStateStorageAccount: '$(terraform_state_STORAGE_ACCOUNT_NAME)'
+          terraformStateContainer: '$(terraform_state_STORAGE_CONTAINER)'
+          terraformStateWorkspace: '$(SCOPE_NAME)'
+
+          terraformAuthentication:
+            ARM_TENANT_ID: $(AZUREAD_TENANT_ID)
+            ARM_SUBSCRIPTION_ID: $(AZURE_SUBSCRIPTION_ID)
+            ARM_CLIENT_ID: $(ARM_CLIENT_ID)
+            ARM_CLIENT_SECRET: $(ARM_CLIENT_SECRET)
+
+          # // deployments //
+          deployments:
+            - jobName: 'Core_Observability' # // change for each deployment object within the deployment job //
+              environment: 'PROD-UKS' # //change for each environment and region //
+              dependsOn: []
+              terraformRootModulePath: '$(terraformDirectory)'
+              terraformStateKey: '$(terraformStateKey)'
+              terraformInputVariables:
+                TF_VAR_region: '$(AZURE_REGION)'
+                TF_VAR_scope_name: '$(SCOPE_NAME)'
+                TF_VAR_app_insights_ikey: '$(acp_env_core_infra_APPLICATION_INSIGHTS_IKEY)'
+      
